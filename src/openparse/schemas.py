@@ -2,12 +2,13 @@ import re
 from collections import defaultdict, namedtuple
 from enum import Enum
 from functools import cached_property
-from typing import Any, List, Literal, Optional, Tuple, Union, Set
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union, Set
 
 from pydantic import BaseModel, ConfigDict, computed_field, model_validator, Field
 
 from openparse import consts
 from openparse.utils import num_tokens
+import numpy as np
 
 bullet_regex = re.compile(
     r"^(\s*[\-•](?!\*)|\s*\*(?!\*)|\s*\d+\.\s|\s*\([a-zA-Z0-9]+\)\s|\s*[a-zA-Z]\.\s)"
@@ -335,6 +336,7 @@ def _determine_relationship(
     elem2: Union["TextElement", "TableElement"],
     line_threshold: float = 1,
     paragraph_threshold: float = 12,
+    line_stats:Optional[Dict[str,float]] = None
 ) -> Literal["same-line", "same-paragraph", None]:
     """
     Determines the relationship between two elements (either TextElement or TableElement).
@@ -344,14 +346,56 @@ def _determine_relationship(
     if isinstance(elem1, TableElement) or isinstance(elem2, TableElement):
         return None
 
-    vertical_distance = abs(elem1.bbox.y0 - elem2.bbox.y0)
+    vertical_distance: float = abs(elem1.bbox.y0 - elem2.bbox.y0)
+    horizontal_distance =   abs(elem1.bbox.x0 - elem2.bbox.x0) 
 
-    if vertical_distance <= line_threshold:
-        return "same-line"
-    elif vertical_distance <= paragraph_threshold:
-        return "same-paragraph"
-    else:
-        return None
+    if line_stats:
+        line_threshold:float = line_stats["median"] 
+        print(f"line_threshold: {line_threshold}")
+
+    try:
+        if vertical_distance <= line_threshold and horizontal_distance <= line_threshold:
+            return "same-line"
+        elif vertical_distance <= paragraph_threshold and horizontal_distance >= line_threshold:
+            return "same-paragraph"
+        else:
+            return None
+    except:
+        print(f"vertical_distance: {vertical_distance}")
+        print(f"line_threshold: {line_threshold}")
+    
+def _calc_line_metrics(
+    elements: List[Union["TextElement", "TableElement"]],
+) -> Dict[str, float]:
+    """
+    Calculate line metrics for a list of elements.
+
+    Args:
+        elements (List[Union[TextElement, TableElement]]): A list of elements.
+
+    Returns:
+        Dict[str, float]: A dictionary containing line metrics:
+            - "median": The median vertical distance between elements.
+            - "mean": The mean vertical distance between elements.
+            - "std": The standard deviation of vertical distances between elements.
+            - "max": The maximum vertical distance between elements.
+            - "min": The minimum vertical distance between elements.
+    """
+    vert_distances = []
+    for elem1, elem2 in zip(elements[:len(elements)-1], elements[1:]):
+        if isinstance(elem1, TableElement) or isinstance(elem2, TableElement):
+            continue
+        vert_distances.append(abs(elem1.bbox.y0 - elem2.bbox.y0))
+
+    # do some stats on the distances
+    median_distance = np.median(vert_distances)
+    mean_distance = np.mean(vert_distances)
+    std_distance = np.std(vert_distances)
+    #max_distance = max(vert_distances)
+    #min_distance = min(vert_distances)
+
+    
+    return {"median": median_distance, "mean": mean_distance, "std": std_distance}    
 
 
 class Node(BaseModel):
@@ -410,11 +454,18 @@ class Node(BaseModel):
         )
 
         texts = []
+        line_stats:Dict[str,float] = _calc_line_metrics(sorted_elements)
+        print(f"line_stats: {line_stats}")
+
         for i in range(len(sorted_elements)):
+            # get avg distance between lines
+
+
+
             current = sorted_elements[i]
             if i > 0:
                 previous = sorted_elements[i - 1]
-                relationship = _determine_relationship(previous, current)
+                relationship = _determine_relationship(previous, current, line_stats)
 
                 if relationship == "same-line":
                     join_str = " "
