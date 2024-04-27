@@ -113,7 +113,6 @@ def ingest(pdf_input: Union[Pdf]) -> List[TextElement]:
                 if not lines:
                     continue
                 bbox = _get_bbox(lines)
-
                 elements.append(
                     TextElement(
                         bbox=Bbox(
@@ -125,7 +124,7 @@ def ingest(pdf_input: Union[Pdf]) -> List[TextElement]:
                             page_width=page_width,
                             page_height=page_height,
                         ),
-                        text="\n".join(line.text for line in lines),
+                        text=" ".join(line.text.strip() for line in lines),
                         lines=tuple(lines),
                     )
                 )
