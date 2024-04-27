@@ -1,102 +1,133 @@
-from typing import List
+from typing import Any, Iterable, List, Union, Tuple
+
+from pdfminer.layout import LTChar, LTTextContainer, LTTextLine
+from pydantic import BaseModel, model_validator
 
 from openparse.pdf import Pdf
 from openparse.schemas import Bbox, LineElement, TextElement, TextSpan
 
 
-def flags_decomposer(flags: int) -> str:
-    """Make font flags human readable."""
-    l = []
-    if flags & 2**0:
-        l.append("superscript")
-    if flags & 2**1:
-        l.append("italic")
-    if flags & 2**2:
-        l.append("serifed")
-    else:
-        l.append("sans")
-    if flags & 2**3:
-        l.append("monospaced")
-    else:
-        l.append("proportional")
-    if flags & 2**4:
-        l.append("bold")
-    return ", ".join(l)
+class CharElement(BaseModel):
+    text: str
+    fontname: str
+    size: float
+
+    @property
+    def is_bold(self) -> bool:
+        return "Bold" in self.fontname or "bold" in self.fontname
+
+    @property
+    def is_italic(self) -> bool:
+        return "Italic" in self.fontname or "italic" in self.fontname
+
+    @model_validator(mode="before")
+    @classmethod
+    def round_size(cls, data: Any) -> Any:
+        data["size"] = round(data["size"], 2)
+        return data
 
 
-def is_bold(flags) -> bool:
-    return bool(flags & 2**4)
+def _extract_chars(text_line: LTTextLine) -> List[CharElement]:
+    return [
+        CharElement(text=char.get_text(), fontname=char.fontname, size=char.size)
+        for char in text_line
+        if isinstance(char, LTChar)
+    ]
 
 
-def is_italic(flags) -> bool:
-    return bool(flags & 2**1)
+def _group_chars_into_spans(chars: Iterable[CharElement]) -> List[TextSpan]:
+    spans = []
+    current_text = ""
+    current_style = (False, False, 0.0)
 
+    for char in chars:
+        char_style = (char.is_bold, char.is_italic, char.size)
+        # If the current character is a space, compress multiple spaces and continue loop.
+        if char.text.isspace():
+            if not current_text.endswith(" "):
+                current_text += " "
+            continue
 
-def _lines_from_ocr_output(lines: dict, error_margin: float = 0) -> List[LineElement]:
-    """
-    Creates LineElement objects from given lines, combining overlapping ones.
-    """
-    combined: List[LineElement] = []
-
-    for line in lines:
-        bbox = line["bbox"]
-        spans = [
-            TextSpan(
-                text=span["text"],
-                is_bold=is_bold(span["flags"]),
-                is_italic=is_italic(span["flags"]),
-                size=span["size"],
-            )
-            for span in line["spans"]
-        ]
-
-        line_element = LineElement(bbox=bbox, spans=tuple(spans))
-        for i, other in enumerate(combined):
-            overlaps = line_element.overlaps(other, error_margin=error_margin)
-            similar_height = line_element.is_at_similar_height(
-                other, error_margin=error_margin
-            )
-
-            if overlaps and similar_height:
-                combined[i] = line_element.combine(other)
-                break
-        else:
-            combined.append(line_element)
-
-    return combined
-
-
-def ingest(
-    doc: Pdf,
-) -> List[TextElement]:
-    """Parses text elements from a given pdf document."""
-    elements = []
-    pdoc = doc.to_pymupdf_doc()
-    for page_num, page in enumerate(pdoc):
-        page_ocr = page.get_textpage_ocr(flags=0, full=False)
-        for node in page.get_text("dict", textpage=page_ocr, sort=True)["blocks"]:
-            if node["type"] != 0:
-                continue
-
-            lines = _lines_from_ocr_output(node["lines"])
-
-            # Flip y-coordinates to match the top-left origin system
-            fy0 = page.rect.height - node["bbox"][3]
-            fy1 = page.rect.height - node["bbox"][1]
-
-            elements.append(
-                TextElement(
-                    bbox=Bbox(
-                        x0=node["bbox"][0],
-                        y0=fy0,
-                        x1=node["bbox"][2],
-                        y1=fy1,
-                        page=page_num,
-                        page_width=page.rect.width,
-                        page_height=page.rect.height,
-                    ),
-                    text="\n".join(line.text for line in lines),
-                    lines=tuple(lines),
+        # If style changes and there's accumulated text, add it to spans.
+        if char_style != current_style and current_text:
+            # Ensure there is at most one space at the end of the text.
+            spans.append(
+                TextSpan(
+                    text=current_text.rstrip()
+                    + (" " if current_text.endswith(" ") else ""),
+                    is_bold=current_style[0],
+                    is_italic=current_style[1],
+                    size=current_style[2],
                 )
             )
+            current_text = char.text
+        else:
+            current_text += char.text
+        current_style = char_style
+
+    # After the loop, add any remaining text as a new span.
+    if current_text:
+        spans.append(
+            TextSpan(
+                text=current_text.rstrip()
+                + (" " if current_text.endswith(" ") else ""),
+                is_bold=current_style[0],
+                is_italic=current_style[1],
+                size=current_style[2],
+            )
+        )
+    return spans
+
+
+def _create_line_element(text_line: LTTextLine) -> LineElement:
+    """Create a LineElement from a text line."""
+    chars = _extract_chars(text_line)
+    spans = _group_chars_into_spans(chars)
+    bbox = (text_line.x0, text_line.y0, text_line.x1, text_line.y1)
+    return LineElement(bbox=bbox, spans=tuple(spans))
+
+
+def _get_bbox(lines: List[LineElement]) -> Tuple[float, float, float, float]:
+    """Get the bounding box of a list of LineElements."""
+    x0 = min(line.bbox[0] for line in lines)
+    y0 = min(line.bbox[1] for line in lines)
+    x1 = max(line.bbox[2] for line in lines)
+    y1 = max(line.bbox[3] for line in lines)
+    return x0, y0, x1, y1
+
+
+def ingest(pdf_input: Union[Pdf]) -> List[TextElement]:
+    """Parse PDF and return a list of LineElement objects."""
+    elements = []
+    page_layouts = pdf_input.extract_layout_pages()
+
+    for page_num, page_layout in enumerate(page_layouts):
+        page_width = page_layout.width
+        page_height = page_layout.height
+        for element in page_layout:
+            if isinstance(element, LTTextContainer):
+                lines = []
+                for text_line in element:
+                    if isinstance(text_line, LTTextLine):
+                        lines.append(_create_line_element(text_line))
+                if not lines:
+                    continue
+                bbox = _get_bbox(lines)
+                print(lines)
+                elements.append(
+                    TextElement(
+                        bbox=Bbox(
+                            x0=bbox[0],
+                            y0=bbox[1],
+                            x1=bbox[2],
+                            y1=bbox[3],
+                            page=page_num,
+                            page_width=page_width,
+                            page_height=page_height,
+                        ),
+                        text=" ".join(line.text.strip() for line in lines),
+                        lines=tuple(lines),
+                    )
+                )
+
     return elements
