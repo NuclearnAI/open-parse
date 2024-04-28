@@ -1,10 +1,10 @@
-from typing import Any, Iterable, List, Union, Tuple
+from typing import Any, Iterable, List, Tuple
 
-from pdfminer.layout import LTChar, LTTextContainer, LTTextLine
-from pydantic import BaseModel, model_validator
-
+import ftfy
 from openparse.pdf import Pdf
 from openparse.schemas import Bbox, LineElement, TextElement, TextSpan
+from pdfminer.layout import LTChar, LTTextContainer, LTTextLine
+from pydantic import BaseModel, model_validator
 
 
 class CharElement(BaseModel):
@@ -96,7 +96,7 @@ def _get_bbox(lines: List[LineElement]) -> Tuple[float, float, float, float]:
     return x0, y0, x1, y1
 
 
-def ingest(pdf_input: Union[Pdf]) -> List[TextElement]:
+def ingest(pdf_input: Pdf) -> List[TextElement]:
     """Parse PDF and return a list of LineElement objects."""
     elements = []
     page_layouts = pdf_input.extract_layout_pages()
@@ -113,6 +113,13 @@ def ingest(pdf_input: Union[Pdf]) -> List[TextElement]:
                 if not lines:
                     continue
                 bbox = _get_bbox(lines)
+
+                processed_text = []
+                for line in lines:
+                    text = line.text.strip()
+                    text = ftfy.fix_text(line.text)
+                    processed_text.append(text)
+
                 elements.append(
                     TextElement(
                         bbox=Bbox(
@@ -124,7 +131,7 @@ def ingest(pdf_input: Union[Pdf]) -> List[TextElement]:
                             page_width=page_width,
                             page_height=page_height,
                         ),
-                        text=" ".join(line.text.strip() for line in lines),
+                        text=" ".join(text for text in processed_text),
                         lines=tuple(lines),
                     )
                 )

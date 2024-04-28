@@ -1,16 +1,15 @@
 from pathlib import Path
-from typing import List, Literal, Optional, TypedDict, Union, TypeVar
+from typing import List, Literal, Optional, TypedDict, TypeVar, Union
 
-from openparse import tables, text, consts
+from openparse import consts, tables, text
 from openparse.pdf import Pdf
-from openparse.types import NOT_GIVEN, NotGiven
 from openparse.processing import (
-    IngestionPipeline,
     BasicIngestionPipeline,
+    IngestionPipeline,
     NoOpIngestionPipeline,
 )
-from openparse.schemas import Node, TableElement, TextElement, ParsedDocument
-
+from openparse.schemas import Node, ParsedDocument, TableElement, TextElement
+from openparse.types import NOT_GIVEN, NotGiven
 
 IngestionPipelineType = TypeVar("IngestionPipelineType", bound=IngestionPipeline)
 
@@ -34,7 +33,7 @@ class PyMuPDFArgsDict(TypedDict, total=False):
 
 
 def _table_args_dict_to_model(
-    args_dict: Union[TableTransformersArgsDict, PyMuPDFArgsDict]
+    args_dict: Union[TableTransformersArgsDict, PyMuPDFArgsDict],
 ) -> Union[tables.TableTransformersArgs, tables.PyMuPDFArgs]:
     if args_dict["parsing_algorithm"] == "table-transformers":
         return tables.TableTransformersArgs(**args_dict)
@@ -83,6 +82,7 @@ class DocumentParser:
         self,
         file: Union[str, Path],
         ocr: bool = False,
+        engine: Optional[Literal["pdfminer", "pymupdf"]] = None,
     ) -> ParsedDocument:
         """
         Parse a given document.
@@ -93,9 +93,10 @@ class DocumentParser:
         """
         doc = Pdf(file)
 
-        text_engine: Literal["pdfminer", "pymupdf"] = (
+        text_engine: Literal["pdfminer", "pymupdf"] = engine or (
             "pdfminer" if not ocr else "pymupdf"
         )
+
         text_elems = text.ingest(doc, parsing_method=text_engine)
         text_nodes = self._elems_to_nodes(text_elems)
 
