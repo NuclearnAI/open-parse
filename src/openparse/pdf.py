@@ -1,15 +1,13 @@
+import io
 import random
-import tempfile
 from pathlib import Path
-from typing import Iterator, List, Literal, Optional, Union, Tuple, Any
-from pydantic import BaseModel
-
-from pdfminer.high_level import extract_pages
-from pdfminer.layout import LTPage
-from pypdf import PdfReader, PdfWriter
+from typing import Any, Iterator, List, Literal, Optional, Tuple, Union
 
 from openparse.schemas import Bbox, Node
-from openparse import consts
+from pdfminer.high_level import extract_pages
+from pdfminer.layout import LTPage
+from pydantic import BaseModel
+from pypdf import PdfReader, PdfWriter
 
 
 class _BboxWithColor(BaseModel):
@@ -56,7 +54,7 @@ def _prepare_bboxes_for_drawing(
                     )
                 )
 
-                text = f"continued ..."
+                text = "continued ..."
     return res
 
 
@@ -99,10 +97,30 @@ class Pdf:
         for page_num in range(start_page - 1, end_page):
             self.writer.add_page(self.reader.pages[page_num])
 
+    # def to_pymupdf_doc(self):
+    #     """
+    #     Transforms the PDF into a PyMuPDF (fitz) document.
+    #     If modifications have been made using PdfWriter, it saves to a temporary file first.
+    #     This function dynamically imports PyMuPDF (fitz), requiring it only if this method is called.
+    #     """
+    #     try:
+    #         import fitz  # type: ignore
+    #     except ImportError:
+    #         raise ImportError(
+    #             "PyMuPDF (fitz) is not installed. This method requires PyMuPDF."
+    #         )
+
+    #     if not self.writer.pages:
+    #         return fitz.open(self.file_path)
+
+    #     with tempfile.NamedTemporaryFile(delete=True, suffix=".pdf") as tmpfile:
+    #         self.writer.write(tmpfile.name)
+    #         return fitz.open(tmpfile.name)
+
     def to_pymupdf_doc(self):
         """
         Transforms the PDF into a PyMuPDF (fitz) document.
-        If modifications have been made using PdfWriter, it saves to a temporary file first.
+        If modifications have been made using PdfWriter, it saves to an in-memory buffer first.
         This function dynamically imports PyMuPDF (fitz), requiring it only if this method is called.
         """
         try:
@@ -115,9 +133,11 @@ class Pdf:
         if not self.writer.pages:
             return fitz.open(self.file_path)
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmpfile:
-            self.writer.write(tmpfile.name)
-            return fitz.open(tmpfile.name)
+        # Use an in-memory bytes buffer instead of a temporary file
+        buffer = io.BytesIO()
+        self.writer.write(buffer)
+        buffer.seek(0)  # Rewind the buffer to the beginning
+        return fitz.open("pdf", buffer.read())
 
     def _draw_bboxes(
         self,
