@@ -7,7 +7,8 @@ from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
 import numpy as np
 from openparse import consts
 from openparse.utils import num_tokens
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import (BaseModel, ConfigDict, Field, computed_field,
+                      model_validator)
 
 bullet_regex = re.compile(
     r"^(\s*[\-•](?!\*)|\s*\*(?!\*)|\s*\d+\.\s|\s*\([a-zA-Z0-9]+\)\s|\s*[a-zA-Z]\.\s)"
@@ -477,8 +478,8 @@ class Node(BaseModel):
                 texts.append(join_str)
 
             texts.append(current.embed_text)
-
-        return "".join(texts)
+        text = "".join(texts)
+        return text.encode('utf-8', 'ignore').decode('utf-8')
 
     @cached_property
     def is_heading(self) -> bool:
@@ -621,4 +622,4 @@ class ParsedDocument(BaseModel):
     # compile all text elements into a single string
     @cached_property
     def text(self) -> str:
-        return "<br><br>".join(node.text for node in self.nodes)
+        return "\n\n".join(node.text for node in self.nodes)
